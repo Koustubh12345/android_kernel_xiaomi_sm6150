@@ -3,12 +3,12 @@
 # --- Config ---
 DEVICE="REDMI NOTE 10 PRO"
 CODENAME="SWEET"
-KERNEL_NAME="VANTOM_KERNEL-OSS-TENSEI-BUILD"
+KERNEL_NAME="TENSEI-KERNEL-BUILD"
 DEFCONFIG="sweet_defconfig"
 ANYKERNEL_REPO="https://github.com/pure-soul-kk/AnyKernel3.git"
 ANYKERNEL_BRANCH="master"
 HOSST="sleeping-bag"
-USEER="puresoulkk"
+USEER="tenseichad"
 
 # --- Telegram Setup ---
 export BOT_MSG_URL="https://api.telegram.org/bot$API_BOT/sendMessage"
