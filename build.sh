@@ -1,138 +1,134 @@
 #!/bin/bash
+#
+# Script For Building Android arm64 Kernel.
+#
 
-# ================= CONFIG =================
-DEVICE="Redmi Note 10 Pro"
-CODENAME="sweet"
-REGION="in"
-KERNEL_NAME="TENSEI-KERNEL-BUILD"
-DEFCONFIG="sweet_defconfig"
+# Setup colors
+yellow='\033[0;33m'
+white='\033[0m'
+red='\033[0;31m'
+green='\e[0;32m'
 
-ANYKERNEL_REPO="https://github.com/pure-soul-kk/AnyKernel3.git"
-ANYKERNEL_BRANCH="master"
-
-HOST="sleeping-bag"
-USER="TenSeiChad"
-
-ANDROID_SUPPORT="11 | 12 | 13 | 14 | 15 | 16"
-
-# Telegram
-BOT_MSG_URL="https://api.telegram.org/bot${API_BOT}/sendMessage"
-BOT_FILE_URL="https://api.telegram.org/bot${API_BOT}/sendDocument"
-
-# ================= FUNCTIONS =================
-tg_msg() {
-    curl -s -X POST "$BOT_MSG_URL" \
-        -d chat_id="$CHATID" \
-        -d parse_mode="Markdown" \
-        --data-urlencode text="$1"
-}
-
-tg_file() {
-    local file="$1"
-    local caption="$2"
-    curl -s -F document=@"$file" \
-        -F chat_id="$CHATID" \
-        -F parse_mode="Markdown" \
-        --data-urlencode caption="$caption" \
-        "$BOT_FILE_URL"
-}
-
-human_time() {
-    local T=$1
-    printf "%d minutes and %d seconds" $((T/60)) $((T%60))
-}
-
-# ================= CLEAN =================
+# Cleanup
+echo -e "$green << cleanup >> \n $white"
 rm -rf out zip error.log
 
-# ================= TOOLCHAIN =================
-# Cloning Clang
+# Device Configuration
+DEVICE="Redmi Note 10 Pro (sweet/in)"
+KERNEL_NAME="TENSEI-KERNEL-BUILD"
+CODENAME="SWEET"
+DEFCONFIG_DEVICE="sweet_defconfig"
+
+# Build Environment
+AnyKernel="https://github.com/pure-soul-kk/AnyKernel3.git"
+AnyKernelbranch="master"
+HOSST="Power-Station"
+USEER="Kernel-Dev"
+
+# Telegram setup
+export BOT_MSG_URL="https://api.telegram.org/bot$API_BOT/sendMessage"
+export BOT_BUILD_URL="https://api.telegram.org/bot$API_BOT/sendDocument"
+
+tg_post_msg() {
+    curl -s -X POST "$BOT_MSG_URL" -d chat_id="$CHATID" \
+    -d "parse_mode=Markdown" \
+    -d text="$1"
+}
+
+tg_post_build() {
+    SHA256CHECK=$(sha256sum "$1" | cut -d' ' -f1)
+    BUILD_DATE=$(date +'%d %b %Y | %H:%M UTC')
+    
+    # Custom Formatted Caption
+    CAPTION="*Kernel Build Completed*
+
+*Device* : $DEVICE
+*Kernel* : $KERNEL_NAME-BUILD
+
+*Android support* : 11 | 12 | 13 | 14 | 15 | 16
+
+*Build date* : $BUILD_DATE
+*Time Took* : $(($Diff / 60)) minutes and $(($Diff % 60)) seconds
+
+build finished in $(($Diff / 60)):$(($Diff % 60)) | *SHA256 Checksum :*
+\`$SHA256CHECK\`"
+
+    curl --progress-bar -F document=@"$1" "$BOT_BUILD_URL" \
+    -F chat_id="$CHATID" \
+    -F "parse_mode=Markdown" \
+    -F caption="$CAPTION"
+}
+
+tg_error() {
+    curl --progress-bar -F document=@"$1" "$BOT_BUILD_URL" \
+    -F chat_id="$CHATID" \
+    -F "parse_mode=Markdown" \
+    -F caption="❌ *Build Failed for $CODENAME*! Check error.log"
+}
+
+# Clang Setup
+echo -e "$green << cloning clang >> \n $white"
 if [ ! -d "$HOME/clang" ]; then
-    git clone --depth=1 -b 15.0 \
-    https://gitlab.com/crdroidandroid/android_prebuilts_clang_host_linux-x86_clang-r547379.git \
-    "$HOME/clang"
+    git clone --depth=1 -b 15.0 https://gitlab.com/crdroidandroid/android_prebuilts_clang_host_linux-x86_clang-r547379.git "$HOME"/clang
 fi
-
-# Set Paths
 export PATH="$HOME/clang/bin:$PATH"
-export LD_LIBRARY_PATH="$HOME/clang/lib64:$LD_LIBRARY_PATH"
 
-# ================= ENV =================
+build_kernel() {
+    Start=$(date +"%s")
+    make -j$(nproc --all) O=out \
+                              ARCH=arm64 \
+                              LLVM=1 \
+                              LLVM_IAS=1 \
+                              AR=llvm-ar \
+                              NM=llvm-nm \
+                              LD=ld.lld \
+                              OBJCOPY=llvm-objcopy \
+                              OBJDUMP=llvm-objdump \
+                              STRIP=llvm-strip \
+                              CC=clang \
+                              CLANG_TRIPLE=aarch64-linux-gnu- \
+                              CROSS_COMPILE=aarch64-linux-android- \
+                              CROSS_COMPILE_ARM32=arm-linux-androideabi- 2>&1 | tee error.log
+    End=$(date +"%s")
+    Diff=$(($End - $Start))
+}
+
+# Start Build Process
+echo -e "$green << doing pre-compilation process >> \n $white"
 export ARCH=arm64
 export SUBARCH=arm64
-export KBUILD_BUILD_HOST="$HOST"
-export KBUILD_BUILD_USER="$USER"
-
-# These variables fix the "CLANG_TRIPLE" error
-KBUILD_COMPILER_STRING=$(clang --version | head -n 1 | perl -pe 's/\(http.*?\)//gs' | sed -e 's/  */ /g' -e 's/[[:space:]]*$//')
-CLANG_TRIPLE=aarch64-linux-gnu-
-
-# ================= START =================
-BUILD_START_EPOCH=$(date +%s)
-BUILD_START_DATE=$(date +"%d %b %Y | %H:%M %Z")
-
-tg_msg "*Kernel Build Started*
-
-Device : $DEVICE ($CODENAME/$REGION)
-Kernel : $KERNEL_NAME
-Build  : $BUILD_START_DATE"
+export KBUILD_BUILD_HOST="$HOSST"
+export KBUILD_BUILD_USER="$USEER"
 
 mkdir -p out
-# Build Config
-make -C $(pwd) O=out ARCH=arm64 "$DEFCONFIG"
+make clean && make mrproper
+make "$DEFCONFIG_DEVICE" O=out
 
-# Build Kernel
-make -j$(nproc --all) O=out \
-    ARCH=arm64 \
-    CC=clang \
-    LLVM=1 \
-    LLVM_IAS=1 \
-    CLANG_TRIPLE=$CLANG_TRIPLE \
-    CROSS_COMPILE=aarch64-linux-gnu- \
-    CROSS_COMPILE_ARM32=arm-linux-gnueabi- \
-    V=0 2>&1 | tee error.log
+tg_post_msg "🚀 *Successful triggered Compiling kernel for $DEVICE*"
 
-# ================= END =================
-BUILD_END_EPOCH=$(date +%s)
-BUILD_END_DATE=$(date +"%d %b %Y | %H:%M %Z")
-BUILD_DIFF=$((BUILD_END_EPOCH - BUILD_START_EPOCH))
-BUILD_TIME=$(human_time "$BUILD_DIFF")
+build_kernel || error=true
 
-# Check if build succeeded (Check for Image.gz-dtb or Image.gz based on your kernel)
-IMG="out/arch/arm64/boot/Image.gz"
-DTBO="out/arch/arm64/boot/dtbo.img"
-DTB="out/arch/arm64/boot/dtb.img"
+export IMG="$PWD"/out/arch/arm64/boot/Image.gz
+export dtbo="$PWD"/out/arch/arm64/boot/dtbo.img
+export dtb="$PWD"/out/arch/arm64/boot/dtb.img
 
-if [[ ! -f "$IMG" ]]; then
-    tg_msg "*Kernel Build Failed*
-
-Device : $DEVICE
-Check error.log"
-    tg_file "error.log" "Build log"
+if [ -f "$IMG" ]; then
+    echo -e "$green << Build completed >> \n $white"
+    echo -e "$green << cloning AnyKernel >> \n $white"
+    git clone --depth=1 "$AnyKernel" --single-branch -b "$AnyKernelbranch" zip
+    cp "$IMG" zip/
+    [ -f "$dtbo" ] && cp "$dtbo" zip/
+    [ -f "$dtb" ] && cp "$dtb" zip/
+    
+    cd zip
+    ZIP_NAME="${KERNEL_NAME}-${CODENAME}-$(date '+%Y%m%d-%H%M').zip"
+    zip -r9 "$ZIP_NAME" * -x .git README.md LICENSE
+    
+    tg_post_build "$ZIP_NAME"
+    cd ..
+    rm -rf out zip error.log
+else
+    echo -e "$red << Build Failed >> \n $white"
+    tg_error "error.log"
     exit 1
 fi
-
-# ================= PACKAGE =================
-git clone --depth=1 -b "$ANYKERNEL_BRANCH" "$ANYKERNEL_REPO" zip
-cp "$IMG" zip/
-[ -f "$DTBO" ] && cp "$DTBO" zip/
-[ -f "$DTB" ] && cp "$DTB" zip/
-cd zip
-
-ZIP_NAME="${KERNEL_NAME}-${CODENAME}-$(date '+%Y%m%d-%H%M').zip"
-zip -r9 "$ZIP_NAME" . -x .git README.md LICENSE "*placeholder*"
-SHA256=$(sha256sum "$ZIP_NAME" | awk '{print $1}')
-cd ..
-
-# ================= FINAL MESSAGE =================
-CAPTION="*Kernel Build Completed*
-
-Device    : $DEVICE ($CODENAME/$REGION)
-Kernel    : $KERNEL_NAME
-
-Android support : $ANDROID_SUPPORT
-Build date : $BUILD_START_DATE
-Time Took : $BUILD_TIME
-SHA256 : \`$SHA256\`"
-
-tg_file "zip/$ZIP_NAME" "$CAPTION"
