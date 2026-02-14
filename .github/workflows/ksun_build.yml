@@ -1,22 +1,17 @@
 name: Sweet Kernel KSUN Build
-
 on:
   workflow_dispatch:
     inputs:
-      KERNEL_BRANCH:
-        description: 'Kernel branch to build'
+      KERNEL_TAG:
+        description: 'Kernel version tag (e.g., v1.0)'
         required: true
-        default: 'master'
-      LOCALVERSION:
-        description: 'Local version (e.g., -Sweet-KSUN)'
-        required: false
-        default: '-Sweet-KSUN'
+        default: 'v1.0'
 
 env:
   CHATID: ${{ secrets.CHAT_ID }}
   API_BOT: ${{ secrets.BOT_API }}
-  DEVICE_TYPE: "sweet"
-  DEFCONFIG: "vendor/sweet_user_defconfig" # Verify this path in your source
+  DEVICE: "sweet"
+  DEFCONFIG: "vendor/sweet_user_defconfig"
 
 jobs:
   build:
@@ -24,34 +19,42 @@ jobs:
     steps:
       - name: Checkout Source
         uses: actions/checkout@v4
-        with:
-          ref: ${{ github.event.inputs.KERNEL_BRANCH }}
-          fetch-depth: 1
 
       - name: Install Build Dependencies
         run: |
           sudo apt-get update
           sudo apt-get install -y git make bc bison openssl curl zip kmod cpio flex libelf-dev \
           libssl-dev libtfm-dev wget device-tree-compiler ca-certificates python3 binutils \
-          binutils-aarch64-linux-gnu aria2
+          binutils-aarch64-linux-gnu binutils-arm-linux-gnueabi aria2
 
-      - name: Setup KernelSU Next
+      - name: Setup KernelSU Next & SUSFS
         run: |
           # 1. Install KSUN driver
           curl -LSs "https://raw.githubusercontent.com/KernelSU-Next/KernelSU-Next/refs/heads/stable/kernel/setup.sh" | bash -s stable
           
-          # 2. Add KSUN Configs to your defconfig
-          # We append these directly so the build system sees them
+          # 2. Apply Manual Hooks (REQUIRED for 4.14)
+          # These patches add the necessary calls to fs/exec.c, fs/open.c, etc.
+          curl -LSs "https://raw.githubusercontent.com/tiann/KernelSU/main/kernel/ksu.patch" | patch -p1 || echo "Manual hooks failed, check compatibility"
+
+          # 3. Add SUSFS Patches
+          git clone https://gitlab.com/simonpunk/susfs4ksu -b kernel-4.14 susfs_src
+          cp susfs_src/kernel_patches/50_add_susfs_in_kernel-4.14.patch .
+          cp susfs_src/kernel_patches/10_enable_susfs_for_ksu.patch KernelSU-Next/
+          
+          patch -p1 < 50_add_susfs_in_kernel-4.14.patch || echo "SUSFS Kernel patch failed"
+          cd KernelSU-Next && patch -p1 < 10_enable_susfs_for_ksu.patch || echo "SUSFS KSUN patch failed"
+          cd ..
+
+          # 4. Inject Configs into Defconfig
           cat >> arch/arm64/configs/${{ env.DEFCONFIG }} << 'EOF'
           CONFIG_KSU=y
+          CONFIG_KSU_MANUAL_HOOK=y
           CONFIG_KSU_SUSFS=y
           CONFIG_KSU_SUSFS_HAS_MAGIC_MOUNT=y
           CONFIG_KSU_SUSFS_SUS_PATH=y
           CONFIG_KSU_SUSFS_SUS_MOUNT=y
           CONFIG_KSU_SUSFS_AUTO_ADD_SUS_KSU_DEFAULT_MOUNT=y
-          CONFIG_KSU_SUSFS_AUTO_ADD_SUS_BIND_MOUNT=y
           CONFIG_KSU_SUSFS_SUS_KSTAT=y
-          CONFIG_KSU_SUSFS_TRY_UMOUNT=y
           CONFIG_KSU_SUSFS_SPOOF_UNAME=y
           CONFIG_KSU_SUSFS_ENABLE_LOG=y
           CONFIG_KSU_SUSFS_HIDE_KSU_SUSFS_SYMBOLS=y
@@ -59,11 +62,8 @@ jobs:
           CONFIG_TMPFS_XATTR=y
           CONFIG_TMPFS_POSIX_ACL=y
           EOF
-          
-          # 3. Handle Local Version
-          echo "CONFIG_LOCALVERSION=\"${{ github.event.inputs.LOCALVERSION }}\"" >> arch/arm64/configs/${{ env.DEFCONFIG }}
 
-      - name: Execute Build
+      - name: Execute Build Script
         run: |
           chmod +x build.sh
           ./build.sh
@@ -71,16 +71,21 @@ jobs:
 
       - name: Package AnyKernel3
         run: |
-          git clone --depth=1 https://github.com/topnotchfreaks/AnyKernel3 -b master AnyKernel3
-          # Assuming build.sh outputs to 'out/arch/arm64/boot/Image.gz-dtb'
-          # Adjust this path based on your specific build.sh output
-          IMAGE_PATH=$(find out -name "Image.gz-dtb" | head -n 1)
-          cp $IMAGE_PATH AnyKernel3/
+          git clone --depth=1 https://github.com/osm0sis/AnyKernel3 AnyKernel3
+          # Find the compiled image (usually in out/arch/arm64/boot/)
+          IMAGE=$(find out -name "Image.gz-dtb" -o -name "Image-dtb" | head -n 1)
+          cp $IMAGE AnyKernel3/
           cd AnyKernel3
-          zip -r9 "../Sweet-KSUN-$(date +'%Y%m%d').zip" *
+          zip -r9 "../Sweet-KSUN-${{ github.event.inputs.KERNEL_TAG }}.zip" * -x .git/*
           
-      - name: Upload Artifact
+      - name: Upload Kernel
         uses: actions/upload-artifact@v4
         with:
-          name: Sweet-Kernel-KSUN
+          name: Sweet-KSUN-Package
           path: "*.zip"
+
+      - name: Send to Telegram
+        if: env.API_BOT != ''
+        run: |
+          ZIP_FILE=$(ls *.zip)
+          curl -F document=@"$ZIP_FILE" "https://api.telegram.org/bot${{ env.API_BOT }}/sendDocument?chat_id=${{ env.CHATID }}&caption=Sweet Kernel KSUN Build Complete"
